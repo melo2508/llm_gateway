@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# IDE settings (personal to each developer's machine)
+.idea/
+.vscode/
+
+# OS clutter
+.DS_Store
+
+# Local secrets — never commit real env values
+.env
+
+# Personal notes, not part of the codebase
+context-summary.pdf
