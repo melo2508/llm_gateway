@@ -16,6 +16,7 @@ from fastapi import FastAPI
 
 from app.api.routes import router
 from app.core.config import settings
+from app.core.redis import connect_redis
 from app.services.mock_llm import MockLLMProvider
 
 
@@ -33,9 +34,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       - When we add Redis, its connection pool opens here and is closed
         after `yield` — otherwise connections leak on every restart.
     """
+    # Connect first: if Redis is unreachable this raises, uvicorn reports
+    # "Application startup failed" and exits — the server never accepts
+    # traffic it can't serve (fail fast).
+    app.state.redis = await connect_redis()
     app.state.provider = MockLLMProvider()
     yield
-    # Nothing to clean up yet. Redis `await client.aclose()` will go here.
+    # Shutdown: close pooled connections cleanly instead of leaving the OS
+    # (and Redis, which tracks clients) to discover dead sockets later.
+    await app.state.redis.aclose()
 
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)

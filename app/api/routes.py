@@ -8,8 +8,10 @@ without spinning up HTTP at all.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
-from app.api.deps import get_provider
+from app.api.deps import get_provider, get_redis
 from app.schemas import ChatCompletionRequest, ChatCompletionResponse
 from app.services.mock_llm import MockLLMProvider, MockProviderError
 
@@ -21,13 +23,32 @@ router = APIRouter()
 
 @router.get("/health", tags=["ops"])
 async def health() -> dict[str, str]:
-    """Liveness check: "is the process up and able to answer HTTP?"
+    """LIVENESS: "is this process alive and able to answer HTTP?"
 
-    Load balancers and Kubernetes hit this every few seconds. It must be
-    cheap and must NOT call the LLM. (Once Redis exists we'll discuss whether
-    to also check dependencies here — liveness vs. readiness.)
+    Orchestrators (e.g. Kubernetes) RESTART the process when this fails.
+    So it must not check dependencies like Redis: if Redis goes down,
+    restarting healthy gateway processes can't fix Redis — it only causes a
+    restart storm. Dependency checks belong in /ready.
     """
     return {"status": "ok"}
+
+
+@router.get("/ready", tags=["ops"])
+async def ready(redis: Redis = Depends(get_redis)) -> dict[str, str]:
+    """READINESS: "can this process serve real traffic right now?"
+
+    Orchestrators STOP SENDING TRAFFIC here when this fails (no restart).
+    When Redis recovers, /ready passes again and traffic resumes on its own.
+    """
+    try:
+        await redis.ping()
+    except RedisError as exc:
+        # 503 Service Unavailable: "temporarily can't serve, try later".
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redis unavailable",
+        ) from exc
+    return {"status": "ready"}
 
 
 @router.post(

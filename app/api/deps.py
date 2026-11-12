@@ -14,6 +14,7 @@ but it hard-wires the route to one specific object. With `Depends(get_provider)`
 """
 
 from fastapi import Request
+from redis.asyncio import Redis
 
 from app.services.mock_llm import MockLLMProvider
 
@@ -26,3 +27,12 @@ def get_provider(request: Request) -> MockLLMProvider:
     reuses the same provider, so the tiktoken encoder is loaded only once.
     """
     return request.app.state.provider
+
+
+def get_redis(request: Request) -> Redis:
+    """Return the shared Redis client created at startup.
+
+    Same pattern as get_provider: one client (with its connection pool) per
+    application, borrowed by every request — and swappable in tests.
+    """
+    return request.app.state.redis

@@ -20,14 +20,6 @@ def make_request(*contents: str) -> ChatCompletionRequest:
     )
 
 
-# `generate()` is async, so its tests must run inside an event loop.
-# The anyio pytest plugin (installed alongside FastAPI) provides that:
-# mark the test with @pytest.mark.anyio and pin the backend to asyncio.
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
-
-
 def test_count_tokens_uses_real_tokenizer(fast_provider: MockLLMProvider) -> None:
     # tiktoken splits "Explain rate limiting" into ["Ex", "plain", " rate",
     # " limiting"]. We pin the exact number so a tokenizer change is noticed.

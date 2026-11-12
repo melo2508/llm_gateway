@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     # ── Redis ────────────────────────────────────────────────────────────
     redis_url: str = "redis://localhost:6379/0"
 
+    # Max seconds to wait when connecting to Redis or for a reply.
+    # Without a timeout, an unreachable Redis can make calls HANG instead of
+    # failing — freezing startup or the /ready check. Redis normally answers
+    # in well under 1ms, so 2s only trips when something is genuinely wrong.
+    redis_timeout: float = 2.0
+
     # ── Server ───────────────────────────────────────────────────────────
     host: str = "0.0.0.0"
     port: int = 8000
