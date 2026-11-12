@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.admin import router as admin_router
 from app.api.routes import router
 from app.core.config import settings
 from app.core.redis import connect_redis
@@ -47,6 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.include_router(router)
+app.include_router(admin_router)
 
 
 if __name__ == "__main__":

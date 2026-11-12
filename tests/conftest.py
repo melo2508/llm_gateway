@@ -8,14 +8,17 @@ A function that builds something a test needs (setup), hands it over with
 FRESH copy, so tests can't leak state into each other.
 """
 
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 
 import pytest
 import redis
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
+from redis.asyncio import Redis
 
 from app.api.deps import get_provider
 from app.core.config import settings
+from app.core.redis import connect_redis
 from app.main import app
 from app.services.mock_llm import MockLLMProvider
 
@@ -58,6 +61,28 @@ def test_redis_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     yield TEST_REDIS_URL
     admin.flushdb()
     admin.close()
+
+
+@pytest.fixture
+async def redis_client(test_redis_url: str, anyio_backend: str) -> AsyncIterator[Redis]:
+    """An async Redis client on the (clean) test DB, for service unit tests.
+
+    An `async def` fixture: setup/teardown can `await`. The anyio plugin runs
+    it in the same event loop as the async test that requests it.
+    """
+    client = await connect_redis(test_redis_url)
+    yield client
+    await client.aclose()
+
+
+TEST_ADMIN_KEY = "test-admin-secret"
+
+
+@pytest.fixture
+def admin_headers(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Configure an admin secret for this test and return matching headers."""
+    monkeypatch.setattr(settings, "admin_api_key", SecretStr(TEST_ADMIN_KEY))
+    return {"X-Admin-Key": TEST_ADMIN_KEY}
 
 
 @pytest.fixture

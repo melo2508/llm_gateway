@@ -23,6 +23,7 @@ which every Big Tech company follows: configuration lives in the
 environment, not in code.
 """
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
 
@@ -59,6 +60,15 @@ class Settings(BaseSettings):
     # failing — freezing startup or the /ready check. Redis normally answers
     # in well under 1ms, so 2s only trips when something is genuinely wrong.
     redis_timeout: float = 2.0
+
+    # ── Admin ────────────────────────────────────────────────────────────
+    # Secret required (in the X-Admin-Key header) to call /admin endpoints.
+    # No default on purpose: if it's not set, admin endpoints are DISABLED
+    # ("fail closed") rather than open to anyone.
+    #
+    # SecretStr instead of str: printing/logging it shows '**********', so it
+    # can't leak by accident. Reading it requires .get_secret_value().
+    admin_api_key: SecretStr | None = None
 
     # ── Server ───────────────────────────────────────────────────────────
     host: str = "0.0.0.0"

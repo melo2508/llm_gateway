@@ -125,3 +125,43 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: list[Choice]
     usage: Usage
+
+
+# ─── TENANT SCHEMAS (our own admin API, not OpenAI format) ──────────────────
+#
+# Three models for three "views" of a tenant — a common pattern:
+#   TenantCreate  → what the admin SENDS (no id: the server assigns it)
+#   Tenant        → what we STORE and SHOW (never contains the API key)
+#   TenantCreated → Tenant + the raw api_key, returned exactly ONCE
+# Separate models make it structurally impossible to, say, accidentally
+# return the API key from a "get tenant" endpoint.
+
+
+class TenantCreate(BaseModel):
+    """Request body for POST /admin/tenants."""
+
+    name: str = Field(min_length=1, max_length=100)
+    # ge=1: a limit of 0 or below would make the tenant unusable — reject it
+    # at the edge rather than discover it in the rate limiter.
+    requests_per_minute: int = Field(default=60, ge=1)
+    tokens_per_minute: int = Field(default=10_000, ge=1)
+
+
+class Tenant(BaseModel):
+    """A tenant as stored in Redis and returned by the admin API."""
+
+    id: str
+    name: str
+    requests_per_minute: int
+    tokens_per_minute: int
+    created_at: int
+
+
+class TenantCreated(Tenant):
+    """Response for POST /admin/tenants — the ONLY time the key is shown.
+
+    We store just its hash, so we can't show it again later. Same model as
+    GitHub/Stripe: "copy this key now, you won't see it again".
+    """
+
+    api_key: str
