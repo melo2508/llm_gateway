@@ -29,8 +29,8 @@ def anyio_backend() -> str:
 
 
 def test_count_tokens_uses_real_tokenizer(fast_provider: MockLLMProvider) -> None:
-    # "Explain rate limiting" → ["Explain", " rate", " limiting"] + ... per
-    # tiktoken. We pin the exact number so a tokenizer change is noticed.
+    # tiktoken splits "Explain rate limiting" into ["Ex", "plain", " rate",
+    # " limiting"]. We pin the exact number so a tokenizer change is noticed.
     assert fast_provider._count_tokens("Explain rate limiting") == 4
 
 
