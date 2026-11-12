@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from app.api.deps import get_provider, get_redis
-from app.schemas import ChatCompletionRequest, ChatCompletionResponse
+from app.api.deps import get_current_tenant, get_provider, get_redis
+from app.schemas import ChatCompletionRequest, ChatCompletionResponse, Tenant
 from app.services.mock_llm import MockLLMProvider, MockProviderError
 
 # APIRouter is a "mini app": a group of routes that main.py plugs into the
@@ -59,13 +59,19 @@ async def ready(redis: Redis = Depends(get_redis)) -> dict[str, str]:
 async def chat_completions(
     body: ChatCompletionRequest,
     provider: MockLLMProvider = Depends(get_provider),
+    tenant: Tenant = Depends(get_current_tenant),
 ) -> ChatCompletionResponse:
     """OpenAI-compatible chat completion endpoint.
 
     By the time this function runs, FastAPI has already:
+      - authenticated the caller (no/bad key → 401, we never run)
       - parsed the JSON body
       - validated it against ChatCompletionRequest (bad input → 422, we never run)
       - called get_provider() and passed us the result
+
+    `tenant` is a parameter (not a router-level `dependencies=[...]` like the
+    admin gate) because we need its VALUE: the rate limiter, next, will
+    enforce this tenant's own limits.
     """
     try:
         return await provider.generate(body)

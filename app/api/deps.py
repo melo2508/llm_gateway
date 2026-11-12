@@ -9,17 +9,20 @@ but it hard-wires the route to one specific object. With `Depends(get_provider)`
   2. Tests can swap the real thing for a fake in one line:
          app.dependency_overrides[get_provider] = lambda: FakeProvider()
      No monkeypatching of module globals.
-  3. This file becomes the single place for "per-request plumbing". Next up,
-     API-key authentication (X-API-Key header) will live here too.
+  3. This file is the single place for "per-request plumbing": shared
+     resources (provider, Redis) and authentication (admin, tenant).
 """
 
 import secrets
 
-from fastapi import Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 from app.core.config import settings
+from app.schemas import Tenant
 from app.services.mock_llm import MockLLMProvider
+from app.services.tenants import get_tenant_by_api_key
 
 
 def get_provider(request: Request) -> MockLLMProvider:
@@ -74,3 +77,72 @@ def require_admin(x_admin_key: str | None = Header(default=None)) -> None:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing X-Admin-Key",
         )
+
+
+def _extract_api_key(authorization: str | None, x_api_key: str | None) -> str | None:
+    """Pull the tenant key from either supported header.
+
+    1. `Authorization: Bearer <key>` — what the official OpenAI SDKs send, so
+       existing OpenAI clients work by just changing base_url and api_key.
+    2. `X-API-Key: <key>` — simpler for curl and scripts.
+    Bearer wins if both are present. The scheme is case-insensitive
+    ("bearer" == "Bearer"), per the HTTP spec.
+    """
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token.strip():
+            return token.strip()
+    if x_api_key:
+        return x_api_key.strip()
+    return None
+
+
+# Per the HTTP spec, a 401 must tell the client HOW to authenticate.
+_UNAUTHORIZED_HEADERS = {"WWW-Authenticate": "Bearer"}
+
+
+async def get_current_tenant(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
+    redis: Redis = Depends(get_redis),
+) -> Tenant:
+    """Authenticate the request and return the calling tenant.
+
+    A dependency with its OWN dependency (get_redis): FastAPI resolves the
+    whole chain — get_redis first, then this — before the route runs.
+
+    Returning the Tenant (instead of just allowing/denying like
+    require_admin) is the point: the route — and next, the rate limiter —
+    needs to know WHO is calling to apply THEIR limits.
+
+    NO TIMING ATTACK HERE (unlike the admin key):
+    We never compare the raw key. We hash it and look the hash up in Redis.
+    Even if lookup timing leaked something about the stored hash, an
+    attacker can't work backwards from a SHA-256 hash to a valid key.
+    """
+    api_key = _extract_api_key(authorization, x_api_key)
+    if api_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing API key: send 'Authorization: Bearer <key>' or 'X-API-Key: <key>'",
+            headers=_UNAUTHORIZED_HEADERS,
+        )
+
+    try:
+        tenant = await get_tenant_by_api_key(redis, api_key)
+    except RedisError as exc:
+        # Redis down mid-run. Without this, the error escapes as a generic
+        # 500 ("bug in our code"). It's really "temporarily can't verify
+        # you" → 503, the same signal /ready gives.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication temporarily unavailable",
+        ) from exc
+
+    if tenant is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+            headers=_UNAUTHORIZED_HEADERS,
+        )
+    return tenant

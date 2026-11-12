@@ -118,6 +118,23 @@ def client(fast_provider: MockLLMProvider, test_redis_url: str) -> Iterator[Test
 
 
 @pytest.fixture
+def api_key(client: TestClient, admin_headers: dict[str, str]) -> str:
+    """Create a real tenant through the admin API and return its raw key.
+
+    Going through the real endpoint (not writing to Redis directly) means
+    these tests also prove that "create tenant → use its key" works end to end.
+    """
+    response = client.post("/admin/tenants", json={"name": "test-tenant"}, headers=admin_headers)
+    return response.json()["api_key"]
+
+
+@pytest.fixture
+def api_headers(api_key: str) -> dict[str, str]:
+    """Headers that authenticate as the test tenant."""
+    return {"X-API-Key": api_key}
+
+
+@pytest.fixture
 def use_provider() -> Callable[[MockLLMProvider], None]:
     """Let a test swap in its own provider (e.g. one that always fails).
 
