@@ -11,7 +11,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from app.api.deps import get_current_tenant, get_provider, get_redis
+from app.api.deps import (
+    enforce_request_rate_limit,
+    get_current_tenant,
+    get_provider,
+    get_redis,
+)
 from app.schemas import ChatCompletionRequest, ChatCompletionResponse, Tenant
 from app.services.mock_llm import MockLLMProvider, MockProviderError
 
@@ -55,6 +60,13 @@ async def ready(redis: Redis = Depends(get_redis)) -> dict[str, str]:
     "/v1/chat/completions",
     response_model=ChatCompletionResponse,
     tags=["chat"],
+    # Runs before the handler; a 429 stops the request here. Listed in the
+    # decorator (not as a parameter) because the handler doesn't need its value.
+    #
+    # It ALSO depends on get_current_tenant, as does the handler below. FastAPI
+    # caches each dependency's result for the duration of one request, so the
+    # tenant is looked up in Redis ONCE, not twice.
+    dependencies=[Depends(enforce_request_rate_limit)],
 )
 async def chat_completions(
     body: ChatCompletionRequest,

@@ -19,6 +19,7 @@ from app.api.routes import router
 from app.core.config import settings
 from app.core.redis import connect_redis
 from app.services.mock_llm import MockLLMProvider
+from app.services.rate_limiter import RateLimiter
 
 
 @asynccontextmanager
@@ -40,6 +41,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # traffic it can't serve (fail fast).
     app.state.redis = await connect_redis()
     app.state.provider = MockLLMProvider()
+    # Built once: registers the Lua script (computes its SHA1) a single time.
+    app.state.rate_limiter = RateLimiter(app.state.redis)
     yield
     # Shutdown: close pooled connections cleanly instead of leaving the OS
     # (and Redis, which tracks clients) to discover dead sockets later.

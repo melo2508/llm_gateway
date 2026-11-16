@@ -13,15 +13,17 @@ but it hard-wires the route to one specific object. With `Depends(get_provider)`
      resources (provider, Redis) and authentication (admin, tenant).
 """
 
+import math
 import secrets
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, Response, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from app.core.config import settings
 from app.schemas import Tenant
 from app.services.mock_llm import MockLLMProvider
+from app.services.rate_limiter import RateLimiter, RateLimitResult
 from app.services.tenants import get_tenant_by_api_key
 
 
@@ -146,3 +148,61 @@ async def get_current_tenant(
             headers=_UNAUTHORIZED_HEADERS,
         )
     return tenant
+
+
+def get_rate_limiter(request: Request) -> RateLimiter:
+    """Return the shared RateLimiter created at startup."""
+    return request.app.state.rate_limiter
+
+
+def _rate_limit_headers(result: RateLimitResult) -> dict[str, str]:
+    """Tell well-behaved clients where they stand, so they can slow down
+    BEFORE hitting the limit instead of discovering it via errors.
+    Sent on every response — successes and 429s alike."""
+    return {
+        "X-RateLimit-Limit-Requests": str(result.limit),
+        "X-RateLimit-Remaining-Requests": str(result.remaining),
+        # Seconds until the bucket is full again. Rounded UP: telling a
+        # client "0" when it's really 0.4 would invite a too-early retry.
+        "X-RateLimit-Reset-Requests": str(math.ceil(result.reset_after)),
+    }
+
+
+async def enforce_request_rate_limit(
+    response: Response,
+    tenant: Tenant = Depends(get_current_tenant),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+) -> RateLimitResult:
+    """Spend one request from the tenant's requests-per-minute bucket.
+
+    Depends on get_current_tenant, so FastAPI's order is guaranteed:
+    authenticate FIRST (we need to know whose bucket), THEN rate limit.
+    Unauthenticated requests never touch any bucket.
+
+    `response: Response` is a placeholder FastAPI gives us: headers set on it
+    are copied onto the real response the route returns. That's how a
+    dependency adds headers to a successful response it doesn't build.
+    """
+    try:
+        result = await limiter.hit(
+            key=f"ratelimit:{tenant.id}:requests",
+            limit=tenant.requests_per_minute,
+        )
+    except RedisError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiting temporarily unavailable",
+        ) from exc
+
+    headers = _rate_limit_headers(result)
+    if not result.allowed:
+        # 429 Too Many Requests. Retry-After is the standard HTTP header for
+        # "come back in N seconds"; the spec requires WHOLE seconds, so we
+        # round up. Clients (incl. the OpenAI SDK) honour it when retrying.
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded: too many requests per minute",
+            headers={**headers, "Retry-After": str(math.ceil(result.retry_after))},
+        )
+    response.headers.update(headers)
+    return result
